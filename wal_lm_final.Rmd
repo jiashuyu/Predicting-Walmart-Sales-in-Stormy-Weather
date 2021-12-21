@@ -1,0 +1,209 @@
+---
+title: "STAT 425 Final"
+author: "Yuqi_Zhang"
+date: "12/14/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library("dplyr")
+library("tidyverse")
+library("lubridate")
+library("glmnet")
+library("caret")
+library("chron")
+library(timeDate)
+```
+
+
+```{r, data}
+training_data_simple = read.csv("training_data_simple.csv")
+```
+
+```{r}
+wal_data = training_data_final %>% 
+  mutate_each(as.factor) %>% 
+  mutate(units = as.numeric(as.character(units))) %>% 
+  select(-date)
+wal_data
+```
+
+
+```{r}
+wal_nz_data = wal_data %>% 
+  filter(units == 0)
+```
+
+```{r ,lm}
+wal_lm = lm(units ~ ., data = final_trn_full)
+cal_rmsle(act = final_tst_full$units,
+          pred = ifelse(predict(wal_lm, final_tst_full)<0, 0, predict(wal_lm, final_tst_full)))
+```
+```{r ,lm}
+wal_lm_log = lm(log(1 + units) ~ ., data = final_trn_full)
+cal_rmsle(act = final_tst_full$units,
+          pred = ifelse(predict(wal_lm, final_tst_full) < 0, 0, predict(wal_lm, final_tst_full)))
+```
+
+```{r ridge}
+wal_ridge = glmnet(x = model.matrix(units ~ .,
+                   data = final_trn_full)[,-1],
+                   y = log(1+final_trn_full$units),
+                   alpha = 0)
+summary(wal_ridge)
+
+ridge_pred = predict(wal_ridge, model.matrix(units ~ ., data = final_tst_full)[,-1])
+
+cal_rmsle(act = final_tst_full$units,
+          pred = ifelse(ridge_pred < 0, 0, ridge_pred ))
+```
+
+```{r lasso}
+wal_lasso = glmnet(x = model.matrix(units ~ .,
+                   data = final_trn_full)[,-1],
+                   y = final_trn_full$units,
+                   alpha = 1)
+summary(wal_lasso)
+
+lasso_pred = predict(wal_lasso, model.matrix(units ~ ., data = final_tst_full)[,-1])
+
+cal_rmsle(act = final_tst_full$units,
+          pred = ifelse(lasso_pred < 0, 0, lasso_pred ))
+```
+
+```{r ,logistic, binomial}
+wal_glm = glm(unitszero ~ . -units - date, family = "binomial", data = wal_data)
+summary(wal_glm)
+mean(as.numeric(as.factor(wal_data$unitszero))-1 == round(predict(wal_glm, wal_data, type = "response")))
+```
+
+```{r, ridge, binomial}
+wal_glm_ridge = cv.glmnet(
+  x = model.matrix(unitszero ~ . - units - date,
+                   data = wal_data)[,-1],
+  y = wal_data$unitszero,
+  family = "binomial",
+  alpha = 0
+)
+summary(wal_glm_ridge)
+mean(wal_data$unitszero == 
+       predict(wal_glm_ridge, model.matrix(unitszero ~ . - units - date,
+                   data = wal_data)[,-1], type = "class"), 
+     s = wal_glm_ridge$lambda.min)
+plot(wal_glm_ridge)
+```
+
+```{r, lasso, binomial}
+wal_glm_lasso = cv.glmnet(
+  x = model.matrix(unitszero ~ . - units - date,
+                   data = wal_data)[,-1],
+  y = wal_data$unitszero,
+  family = "binomial",
+  alpha = 1
+)
+summary(wal_glm_lasso)
+mean(wal_data$unitszero == 
+       predict(wal_glm_lasso, model.matrix(unitszero ~ . - units - date,
+                   data = wal_data)[,-1], type = "class"), 
+     s = wal_glm_lasso$lambda.min)
+plot(wal_glm_lasso)
+```
+
+```{r}
+cal_rmsle = function(act, pred) {
+  sqrt(mean((log(pred + 1) - log(act + 1))^2))
+}
+```
+
+
+```{r, wal_ranger}
+wal_ranger = train(units ~ . ,
+      data = final_trn_full,
+      method = "ranger",
+      trControl = trainControl(method = "oob"))
+cal_rmsle(act = final_tst_full$units, pred = predict(wal_ranger, final_tst_full))
+```
+
+```{r, wal_ranger}
+wal_ranger_log = train(log(1+units) ~ . ,
+      data = final_trn_full,
+      method = "ranger",
+      trControl = trainControl(method = "oob"))
+cal_rmsle(act = final_tst_full$units, pred = predict(wal_ranger_log, final_tst_full))
+```
+
+```{r}
+wal_nz_lm = lm(units~., data = wal_nz_data[c("snowfall", "preciptotal", "store_nbr", "item_nbr", "units","weekday", "holiday","month","year","day")])
+
+act1 = wal_nz_data$units
+pred_raw1 = predict(wal_nz_lm, wal_nz_data[c("snowfall", "preciptotal", "store_nbr", "item_nbr", "units","weekday","holiday","month","year","day")])
+pred1 = ifelse(pred_raw1 < 0, 0, pred_raw1)
+
+  sqrt(
+    (sum(
+        ((log(pred1 + 1) - log(act1 + 1))^2)
+        )
+    )/nrow(wal_data)
+      )
+```
+
+```{r}
+wal_nz_ridge = cv.glmnet(x = model.matrix(units ~ . ,
+                   data =  wal_nz_data[c("snowfall", "preciptotal", "store_nbr", "item_nbr", "units","weekday", "holiday","month","year","day")])[,-1],
+                   y = wal_nz_data$units,
+                   alpha = 0)
+
+act1_ridge = wal_nz_data$units
+pred_raw1_ridge = predict(wal_nz_ridge, model.matrix(units ~ . ,
+                   data =  wal_nz_data[c("snowfall", "preciptotal", "store_nbr", "item_nbr", "units","weekday", "holiday","month","year","day")])[,-1])
+pred1_ridge = ifelse(pred_raw1_ridge < 0, 0, pred_raw1_ridge)
+
+  sqrt(
+    (sum(
+        ((log(act1_ridge + 1) - log(pred1_ridge + 1))^2)
+        )
+    )/nrow(wal_data)
+      )
+```
+
+## EDA
+```{r, eda-plots, fig.height = 4, fig.width = 14}
+
+final_data %>% 
+  ggplot(aes(x = units)) + 
+  geom_histogram(bins = 50)
+
+final_data %>% 
+  filter(0<units&units<50) %>% 
+  ggplot(aes(x = units)) + 
+  geom_histogram(bins = 50)
+
+final_data %>% 
+  filter(units>50 & units<200) %>% 
+  ggplot(aes(x = units)) + 
+  geom_histogram(bins = 50)
+
+final_data %>% 
+  filter(units>200 & units<400) %>% 
+  ggplot(aes(x = units)) + 
+  geom_histogram(bins = 50)
+
+final_data %>% 
+  filter(units>400 & units<600) %>% 
+  ggplot(aes(x = units)) + 
+  geom_histogram(bins = 50)
+
+table(final_data$units)
+
+final_data %>% 
+  ggplot(aes(x = item_nbr, y = units, colour = units)) + 
+  geom_boxplot()
+```
+
+```{r, print-eda-plots}
+gridExtra::grid.arrange(p01, p02, p03)
+```
